@@ -117,6 +117,7 @@ class ELinuxWindowWayland : public ELinuxWindow, public WindowBindingHandler {
   static const xdg_wm_base_listener kXdgWmBaseListener;
   static const xdg_surface_listener kXdgSurfaceListener;
   static const xdg_toplevel_listener kXdgToplevelListener;
+  static const wl_shell_surface_listener kWlShellSurfaceListener;
   static const wl_surface_listener kWlSurfaceListener;
   static const wl_seat_listener kWlSeatListener;
   static const wl_pointer_listener kWlPointerListener;
@@ -167,6 +168,8 @@ class ELinuxWindowWayland : public ELinuxWindow, public WindowBindingHandler {
   wl_touch* wl_touch_;
   wl_keyboard* wl_keyboard_;
   wl_surface* wl_cursor_surface_;
+  wl_shell* wl_shell_;
+  wl_shell_surface* wl_shell_surface_;
   xdg_wm_base* xdg_wm_base_;
   xdg_surface* xdg_surface_;
   xdg_toplevel* xdg_toplevel_;

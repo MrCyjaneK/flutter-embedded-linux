@@ -150,6 +150,44 @@ const xdg_toplevel_listener ELinuxWindowWayland::kXdgToplevelListener = {
           self->running_ = false;
         }};
 
+const wl_shell_surface_listener ELinuxWindowWayland::kWlShellSurfaceListener = {
+    .ping = [](void *, struct wl_shell_surface *shell_surface, uint32_t serial) {
+          ELINUX_LOG(TRACE) << "wl_shell_surface_listener.ping";
+          wl_shell_surface_pong(shell_surface, serial);
+      },
+    .configure = [](void *data, struct wl_shell_surface *, uint32_t, int32_t width, int32_t height) {
+          ELINUX_LOG(TRACE) << "wl_shell_surface_listener.configure";
+          auto self = reinterpret_cast<ELinuxWindowWayland*>(data);
+
+          if (self->current_rotation_ == 90 || self->current_rotation_ == 270) {
+            std::swap(width, height);
+          }
+
+          int32_t next_width_dip = width / self->current_scale_;
+          int32_t next_height_dip = height / self->current_scale_;
+          if (self->restore_window_required_) {
+            self->restore_window_required_ = false;
+            next_width_dip = self->restore_window_width_;
+            next_height_dip = self->restore_window_height_;
+          }
+
+          if (!next_width_dip || !next_height_dip ||
+              (self->view_properties_.width == next_width_dip &&
+               self->view_properties_.height == next_height_dip)) {
+            return;
+          }
+
+          ELINUX_LOG(TRACE) << "request redraw: " << next_width_dip << ", "
+                            << next_height_dip;
+          self->view_properties_.width = next_width_dip;
+          self->view_properties_.height = next_height_dip;
+          self->request_redraw_ = true;
+      },
+    .popup_done = [](void *, struct wl_shell_surface *) {
+          ELINUX_LOG(TRACE) << "wl_shell_surface_listener.popup_done";
+
+      }};
+
 const wl_surface_listener ELinuxWindowWayland::kWlSurfaceListener = {
     .enter =
         [](void* data, wl_surface* wl_surface, wl_output* output) {
@@ -683,6 +721,12 @@ const wl_output_listener ELinuxWindowWayland::kWlOutputListener = {
     },
     .done = [](void* data, wl_output* wl_output) -> void {
       ELINUX_LOG(TRACE) << "wl_output_listener.done";
+
+      auto self = reinterpret_cast<ELinuxWindowWayland*>(data);
+
+      if (self->wait_for_configure_) {
+        self->wait_for_configure_ = false;
+      }
     },
     .scale = [](void* data, wl_output* wl_output, int32_t scale) -> void {
       ELINUX_LOG(TRACE) << "wl_output_listener.scale";
@@ -1203,6 +1247,13 @@ ELinuxWindowWayland::~ELinuxWindowWayland() {
     wl_shm_ = nullptr;
   }
 
+  if (wl_shell_surface_)
+     wl_shell_surface_destroy(wl_shell_surface_);
+
+  if (wl_shell_) {
+     wl_shell_destroy(wl_shell_);
+  }
+
   if (xdg_toplevel_) {
     xdg_toplevel_destroy(xdg_toplevel_);
     xdg_toplevel_ = nullptr;
@@ -1338,8 +1389,8 @@ bool ELinuxWindowWayland::CreateRenderSurface(int32_t width_px,
     return false;
   }
 
-  if (!xdg_wm_base_) {
-    ELINUX_LOG(ERROR) << "Xdg-shell is invalid";
+  if (!wl_shell_) {
+    ELINUX_LOG(ERROR) << "Wl_shell is invalid";
     return false;
   }
 
@@ -1367,22 +1418,23 @@ bool ELinuxWindowWayland::CreateRenderSurface(int32_t width_px,
 
   wl_surface_add_listener(native_window_->Surface(), &kWlSurfaceListener, this);
 
-  xdg_surface_ =
-      xdg_wm_base_get_xdg_surface(xdg_wm_base_, native_window_->Surface());
-  if (!xdg_surface_) {
-    ELINUX_LOG(ERROR) << "Failed to get the xdg surface.";
+  wl_shell_surface_ =
+      wl_shell_get_shell_surface(wl_shell_, native_window_->Surface());
+
+  if (!wl_shell_surface_) {
+    ELINUX_LOG(ERROR) << "Failed to get the wl surface.";
     return false;
   }
-  xdg_surface_add_listener(xdg_surface_, &kXdgSurfaceListener, this);
+  wl_shell_surface_add_listener(wl_shell_surface_, &kWlShellSurfaceListener, this);
 
-  xdg_toplevel_ = xdg_surface_get_toplevel(xdg_surface_);
-  if (view_properties_.title != nullptr) {
-    xdg_toplevel_set_title(xdg_toplevel_, view_properties_.title);
-  }
+  wl_shell_surface_set_toplevel(wl_shell_surface_);
+
   if (view_properties_.app_id != nullptr) {
-    xdg_toplevel_set_app_id(xdg_toplevel_, view_properties_.app_id);
+    wl_shell_surface_set_title(wl_shell_surface_, view_properties_.app_id);
   }
-  xdg_toplevel_add_listener(xdg_toplevel_, &kXdgToplevelListener, this);
+  if (view_properties_.title != nullptr) {
+    wl_shell_surface_set_title(wl_shell_surface_, view_properties_.title);
+  }
   wl_surface_set_buffer_scale(native_window_->Surface(), current_scale_);
 
   {
@@ -1398,7 +1450,7 @@ bool ELinuxWindowWayland::CreateRenderSurface(int32_t width_px,
   }
 
   if (view_properties_.view_mode == FlutterDesktopViewMode::kFullscreen) {
-    xdg_toplevel_set_fullscreen(xdg_toplevel_, NULL);
+    wl_shell_surface_set_maximized(wl_shell_surface_, wl_output_);
   }
 
   wait_for_configure_ = true;
@@ -1589,6 +1641,11 @@ void ELinuxWindowWayland::WlRegistryHandler(wl_registry* wl_registry,
     constexpr uint32_t kMaxVersion = 1;
     wl_subcompositor_ = static_cast<wl_subcompositor*>(wl_registry_bind(
         wl_registry, name, &wl_subcompositor_interface, kMaxVersion));
+  }
+
+  if (!strcmp(interface, wl_shell_interface.name)) {
+    wl_shell_ = (struct wl_shell *)wl_registry_bind(
+                wl_registry, name, &wl_shell_interface, 1);
   }
 
   if (!strcmp(interface, xdg_wm_base_interface.name)) {
