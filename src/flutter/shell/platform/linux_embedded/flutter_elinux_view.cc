@@ -48,6 +48,7 @@ FlutterELinuxView::~FlutterELinuxView() {
 }
 
 bool FlutterELinuxView::DispatchEvent() {
+  textinput_handler_->DispatchEvent();
   return binding_handler_->DispatchEvent();
 }
 
