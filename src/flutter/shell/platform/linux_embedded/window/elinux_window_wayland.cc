@@ -230,7 +230,6 @@ const wp_presentation_listener ELinuxWindowWayland::kWpPresentationListener = {
     .clock_id =
         [](void* data, wp_presentation* wp_presentation, uint32_t clk_id) {
           ELINUX_LOG(TRACE) << "wp_presentation_listener.clock_id";
-
           auto self = reinterpret_cast<ELinuxWindowWayland*>(data);
           self->wp_presentation_clk_id_ = clk_id;
           ELINUX_LOG(TRACE) << "clk_id = " << clk_id;
@@ -529,6 +528,9 @@ const wl_pointer_listener ELinuxWindowWayland::kWlPointerListener = {
     },
 };
 
+uint32_t down_last_x = 0;
+uint32_t down_last_y = 0;
+
 const wl_touch_listener ELinuxWindowWayland::kWlTouchListener = {
     .down = [](void* data,
                wl_touch* wl_touch,
@@ -545,7 +547,13 @@ const wl_touch_listener ELinuxWindowWayland::kWlTouchListener = {
       if (self->binding_handler_delegate_) {
         double x = wl_fixed_to_double(surface_x);
         double y = wl_fixed_to_double(surface_y);
-        self->binding_handler_delegate_->OnTouchDown(time, id, x, y);
+
+        ELINUX_LOG(TRACE) << "wl_touch_listener.down: before OnTouchDown ("
+            << x << ", " << y << ", " << id << ");";
+//        self->binding_handler_delegate_->OnTouchDown(time, id, x, y);
+        down_last_x = x;
+        down_last_y = y;
+        self->binding_handler_delegate_->OnPointerDown(x, y, kFlutterPointerButtonMousePrimary);
       }
     },
     .up = [](void* data,
@@ -558,7 +566,10 @@ const wl_touch_listener ELinuxWindowWayland::kWlTouchListener = {
       auto self = reinterpret_cast<ELinuxWindowWayland*>(data);
       self->serial_ = serial;
       if (self->binding_handler_delegate_) {
-        self->binding_handler_delegate_->OnTouchUp(time, id);
+        ELINUX_LOG(TRACE) << "wl_touch_listener.up: before OnTouchUp (" << id << ");";
+//        self->binding_handler_delegate_->OnTouchUp(time, id);
+        self->binding_handler_delegate_->OnPointerUp(down_last_x, down_last_y, kFlutterPointerButtonMousePrimary);
+        ELINUX_LOG(TRACE) << "wl_touch_listener.up: after OnTouchUp";
       }
     },
     .motion = [](void* data,
@@ -573,7 +584,13 @@ const wl_touch_listener ELinuxWindowWayland::kWlTouchListener = {
       if (self->binding_handler_delegate_) {
         double x = wl_fixed_to_double(surface_x);
         double y = wl_fixed_to_double(surface_y);
-        self->binding_handler_delegate_->OnTouchMotion(time, id, x, y);
+        double x_px = wl_fixed_to_double(surface_x) * self->current_scale_;
+        double y_px = wl_fixed_to_double(surface_y) * self->current_scale_;
+        self->binding_handler_delegate_->OnPointerMove(x, y);
+        self->pointer_x_ = x_px;
+        self->pointer_y_ = y_px;
+        // self->binding_handler_delegate_->OnTouchMotion(time, id, x, y);
+
       }
     },
     .frame = [](void* data, wl_touch* wl_touch) -> void {},
@@ -1287,6 +1304,7 @@ ELinuxWindowWayland::~ELinuxWindowWayland() {
 }
 
 void ELinuxWindowWayland::SetView(WindowBindingHandlerDelegate* window) {
+  ELINUX_LOG(TRACE) << "elinux_window_wayland.set_view: ";
   binding_handler_delegate_ = window;
 }
 
